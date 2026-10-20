@@ -1,0 +1,11 @@
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+node_modules
+ESTUDO.md
+CLAUDE.md
+AGENTS.md
