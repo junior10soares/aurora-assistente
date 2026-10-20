@@ -1,5 +1,5 @@
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
-import { Command } from "@langchain/langgraph";
+import { Command, MemorySaver } from "@langchain/langgraph";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { AssistenteIdSchema, type AssistenteId } from "./agente/assistentes";
@@ -146,10 +146,16 @@ export function criarServico(grafo: Grafo) {
 
 export type Servico = ReturnType<typeof criarServico>;
 
-// ponytail: singleton em globalThis para o MemorySaver sobreviver ao hot reload do Next em dev.
-const global_ = globalThis as typeof globalThis & { __aurora?: Servico };
+// Só o checkpoint (as conversas) fica em globalThis e sobrevive ao hot reload do Next em dev.
+// O serviço é cache do módulo: ao editar um prompt, ferramenta ou o grafo, ele é recriado com o código novo.
+const global_ = globalThis as typeof globalThis & { __auroraCheckpoint?: MemorySaver };
+let instancia: Servico | undefined;
 export function servico(): Servico {
-  return (global_.__aurora ??= criarServico(criarGrafo({ modelo: criarModeloOpenAI() })));
+  if (!process.env.OPENAI_API_KEY) {
+    throw new ErroHttp(503, "OPENAI_API_KEY não configurada: copie .env.example para .env.local e preencha (ver README).");
+  }
+  const checkpointer = (global_.__auroraCheckpoint ??= new MemorySaver());
+  return (instancia ??= criarServico(criarGrafo({ modelo: criarModeloOpenAI(), checkpointer })));
 }
 
 /** Converte o resultado (ou o erro) em resposta HTTP, sem vazar detalhes internos. */

@@ -233,6 +233,17 @@ describe("6. Saída inválida e limites", () => {
     expect(v.erro).toMatchObject({ codigo: "LIMITE_TEMPO" });
   });
 
+  it("uma ferramenta lenta não ultrapassa o limite total: é cortada no prazo do turno", async () => {
+    simularFalhas("listar_chamados", "lenta", "lenta", "lenta"); // sem o prazo: 3 × 2 s + esperas
+    const { servico, chamadas } = montar([pedir("listar_chamados", {}), responder("x")], { tempoAtivoMaxMs: 300 });
+    const inicio = performance.now();
+    const v = await servico.enviarMensagem(novaSessao(), "Liste.");
+
+    expect(performance.now() - inicio).toBeLessThan(1000);
+    expect(ultimoResultado(chamadas[1])).toBeNull(); // o modelo nem é chamado de novo
+    expect(v.erro).toMatchObject({ codigo: "LIMITE_TEMPO" });
+  });
+
   it("a espera humana não consome o tempo de execução ativa", async () => {
     const { servico, grafo } = montar(roteiroEscalonamento());
     const sessao = novaSessao();

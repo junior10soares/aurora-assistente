@@ -64,6 +64,9 @@ body {
 
 .vazio, .pensando { color: var(--suave); margin: 0; }
 
+/* Com proposta pendente, a conversa encolhe para os botões de decisão ficarem visíveis. */
+.app:has(.proposta) .conversa { max-height: 32vh; }
+
 .balao { margin: 0; padding: 8px 12px; border-radius: 10px; white-space: pre-wrap; max-width: 85%; }
 .usuario { align-self: flex-end; background: var(--balao-usuario); }
 .assistente { align-self: flex-start; border: 1px solid var(--borda); }

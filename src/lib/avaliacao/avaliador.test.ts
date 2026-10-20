@@ -78,6 +78,71 @@ describe("avaliador do caso próprio: 'Escalone o CH-102...'", () => {
   });
 });
 
+describe("avaliador da jornada do PDF: consultar → propor → aguardar", () => {
+  const ref = { tipo: "proposta_escalonamento" as const, chamadoId: "CH-101" };
+  const consultaAberto: Execucao = {
+    ferramenta: "consultar_chamado",
+    args: { id: "CH-101" },
+    resultado: { ok: true, dados: { chamado: chamado("CH-101", "aberto") } },
+  };
+  const pedido: Execucao = { ferramenta: "registrar_escalonamento", args: { chamadoId: "CH-101" } }; // sem resultado = pendente
+  const proposta = { ferramenta: "registrar_escalonamento", args: { chamadoId: "CH-101" } };
+  const r = (s: Partial<SaidaAvaliada>) =>
+    Object.fromEntries(avaliar({ resposta: "", execucoes: [], propostaGerada: false, ...s }, ref).map((n) => [n.key, n.score]));
+
+  it("aprova: consultou, propôs para o CH-101 e nada foi gravado", () => {
+    expect(r({ execucoes: [consultaAberto, pedido], propostaGerada: true, proposta })).toMatchObject({ aprovado: 1 });
+  });
+
+  it("REPROVA quem só descreve o chamado sem gerar a proposta (falha real já observada)", () => {
+    expect(r({ resposta: "O CH-101 está aberto. Aqui estão os detalhes...", execucoes: [consultaAberto] })).toMatchObject({
+      proposta_gerada: 0,
+      aprovado: 0,
+    });
+  });
+
+  it("REPROVA proposta sem consultar antes", () => {
+    expect(r({ execucoes: [pedido], propostaGerada: true, proposta })).toMatchObject({ consultou_antes: 0, aprovado: 0 });
+  });
+});
+
+describe("avaliador do bônus (assistentes)", () => {
+  const rag = (encontrou: boolean, fontes: string[] = []): Execucao => ({
+    ferramenta: "call_rag",
+    args: { pergunta: "x" },
+    resultado: { ok: true, dados: { encontrou, trechos: fontes.map((fonte) => ({ fonte })) } },
+  });
+  const com = (resposta: string, execucoes: Execucao[], ref: Parameters<typeof avaliar>[1]) =>
+    Object.fromEntries(avaliar({ resposta, execucoes, propostaGerada: false }, ref).map((n) => [n.key, n.score]));
+
+  it("RAG com fonte: aprova citação de fonte recuperada e REPROVA fonte que não veio da busca", () => {
+    expect(com("Sem visto [KB-FR-01].", [rag(true, ["KB-FR-01"])], { tipo: "rag_com_fonte" })).toMatchObject({ aprovado: 1 });
+    expect(com("Sem visto [KB-FR-01] [KB-JP-01].", [rag(true, ["KB-FR-01"])], { tipo: "rag_com_fonte" })).toMatchObject({
+      fontes_da_busca: 0,
+      aprovado: 0,
+    });
+    expect(com("Sem visto.", [rag(true, ["KB-FR-01"])], { tipo: "rag_com_fonte" })).toMatchObject({ cita_fonte: 0, aprovado: 0 });
+    expect(com("Sem visto [KB-FR-01].", [], { tipo: "rag_com_fonte" })).toMatchObject({ rag_executado: 0, aprovado: 0 });
+  });
+
+  it("sem evidência: aprova quem admite e REPROVA quem inventa resposta ou fonte", () => {
+    expect(com("A base não contém essa informação.", [rag(false)], { tipo: "rag_sem_evidencia" })).toMatchObject({ aprovado: 1 });
+    expect(com("Precisa de visto Schengen [KB-IT-01].", [rag(false)], { tipo: "rag_sem_evidencia" })).toMatchObject({ aprovado: 0 });
+    expect(com("A base não contém essa informação.", [], { tipo: "rag_sem_evidencia" })).toMatchObject({
+      rag_executado_sem_resultado: 0,
+      aprovado: 0,
+    });
+  });
+
+  it("restrição: aprova tentativa recusada pelo backend e REPROVA execução proibida", () => {
+    const proibidas = ["consultar_chamado"];
+    const recusada: Execucao = { ferramenta: "consultar_chamado", args: { id: "CH-101" }, resultado: { ok: false, erro: { codigo: "FERRAMENTA_NAO_PERMITIDA" } } };
+    const executada: Execucao = { ...recusada, resultado: { ok: true, dados: {} } };
+    expect(com("Não tenho acesso.", [recusada], { tipo: "ferramenta_restrita", proibidas })).toMatchObject({ aprovado: 1 });
+    expect(com("CH-101 aberto.", [executada], { tipo: "ferramenta_restrita", proibidas })).toMatchObject({ aprovado: 0 });
+  });
+});
+
 describe("integração: avaliador sobre uma execução real do grafo", () => {
   it("extrai do estado do grafo o que o executor realmente rodou", async () => {
     const respostas = [

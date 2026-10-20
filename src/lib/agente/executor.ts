@@ -122,7 +122,13 @@ export async function executarFerramenta(
   nome: string,
   args: unknown,
   // permitidas: ferramentas do assistente da execução (o grafo sempre informa; omitido = catálogo todo).
-  opcoes: { aprovacao?: { propostaId: string }; limites?: Partial<Limites>; permitidas?: readonly string[] } = {},
+  // prazo: instante (performance.now()) em que acaba o orçamento de execução ativa do turno.
+  opcoes: {
+    aprovacao?: { propostaId: string };
+    limites?: Partial<Limites>;
+    permitidas?: readonly string[];
+    prazo?: number;
+  } = {},
 ): Promise<ResultadoFerramenta> {
   const limites = { ...LIMITES, ...opcoes.limites };
   // A chave de idempotência é o propostaId: repetir a aprovação não duplica o registro.
@@ -139,9 +145,13 @@ export async function executarFerramenta(
         throw new ErroFerramenta("APROVACAO_NECESSARIA", "Esta ferramenta só executa após aprovação humana.");
       }
       while (true) {
+        // Limite TOTAL da execução: nenhuma tentativa começa ou dura além do orçamento do turno.
+        const restante = (opcoes.prazo ?? Infinity) - performance.now();
+        if (restante <= 0) throw new ErroFerramenta("LIMITE_TEMPO", "Limite de execução ativa do turno atingido.");
+        const timeoutMs = Math.max(1, Math.floor(Math.min(limites.timeoutMs, restante)));
         tentativas++;
         try {
-          const tentativa = traceable(() => comTimeout(tentar(nome, ferramenta, dados, chave, limites), limites.timeoutMs), {
+          const tentativa = traceable(() => comTimeout(tentar(nome, ferramenta, dados, chave, limites), timeoutMs), {
             name: `tentativa ${tentativas}`,
           });
           const validada = ferramenta.saida.safeParse(await tentativa());

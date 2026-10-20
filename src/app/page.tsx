@@ -51,6 +51,7 @@ export default function Home() {
   const [carregando, setCarregando] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
   const fim = useRef<HTMLDivElement>(null);
+  const cartao = useRef<HTMLElement>(null);
 
   useEffect(() => setSessaoId(lerSessao()), []);
 
@@ -60,6 +61,8 @@ export default function Home() {
   }, [sessaoId, assistente]);
 
   useEffect(() => fim.current?.scrollIntoView({ behavior: "smooth" }), [visao]);
+  // A decisão é a ação mais importante: quando surge uma proposta, leva o card (e os botões) para a vista.
+  useEffect(() => cartao.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), [visao?.proposta?.propostaId]);
 
   async function executar(acao: () => Promise<VisaoSessao>) {
     setCarregando(true);
@@ -132,7 +135,7 @@ export default function Home() {
       </section>
 
       {proposta && (
-        <section className="proposta" aria-label="Proposta aguardando aprovação">
+        <section ref={cartao} className="proposta" aria-label="Proposta aguardando aprovação">
           <h2>Proposta de escalonamento: aguardando sua decisão</h2>
           <dl>
             {Object.entries(proposta.args).map(([campo, valor]) => (
@@ -186,7 +189,7 @@ function Item({ item }: { item: ItemConversa }) {
     case "usuario":
       return <p className="balao usuario">{item.texto}</p>;
     case "assistente":
-      return <p className="balao assistente">{item.texto}</p>;
+      return <p className="balao assistente">{formatar(item.texto)}</p>;
     case "chamada":
       return (
         <p className="ferramenta">
@@ -200,4 +203,13 @@ function Item({ item }: { item: ItemConversa }) {
         </p>
       );
   }
+}
+
+// O modelo responde em Markdown. Negrito (**texto**) vira <strong> e marcas de título (#) somem;
+// o resto fica como texto puro (o React escapa tudo, então não há risco de injetar HTML).
+function formatar(texto: string) {
+  return texto
+    .replace(/^#{1,6}\s+/gm, "")
+    .split(/\*\*(.+?)\*\*/g)
+    .map((parte, i) => (i % 2 ? <strong key={i}>{parte}</strong> : parte));
 }

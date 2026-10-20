@@ -151,7 +151,8 @@ export function criarGrafo(opcoes: {
         if (p.ok) propostaPendente = { ...p.proposta, toolCallId: id };
         else respostas.push(resposta(id, chamada.name, p));
       } else {
-        respostas.push(resposta(id, chamada.name, await executarFerramenta(chamada.name, chamada.args, { permitidas })));
+        const prazo = inicio + limites.tempoAtivoMaxMs - estado.tempoAtivoMs; // orçamento restante do turno
+        respostas.push(resposta(id, chamada.name, await executarFerramenta(chamada.name, chamada.args, { permitidas, prazo })));
       }
     }
 
@@ -191,6 +192,7 @@ export function criarGrafo(opcoes: {
     const resultado = await executarFerramenta(proposta.ferramenta, proposta.args, {
       aprovacao: { propostaId: proposta.propostaId },
       permitidas: assistenteDe(config).ferramentas,
+      prazo: inicio + limites.tempoAtivoMaxMs - estado.tempoAtivoMs,
     });
     return {
       propostaPendente: null,

@@ -18,6 +18,9 @@ Regras:
 - Somente chamados com situação "aberto" podem ser escalonados. Consulte o chamado antes de propor.
 - Para escalonar, chame registrar_escalonamento com chamadoId, resumo e justificativa. Isso gera uma
   proposta para aprovação humana; o registro só acontece se a pessoa aprovar.
+- Quando o usuário pedir um escalonamento (ou "prepare um escalonamento se estiver aberto") e a consulta
+  mostrar que o chamado está aberto, chame registrar_escalonamento NA MESMA RESPOSTA. Não apenas descreva o
+  chamado nem peça confirmação em texto: a aprovação acontece na tela, sobre a proposta gerada.
 - Nunca diga que algo foi registrado sem a confirmação no retorno da ferramenta.
 - Se uma ferramenta retornar erro, explique o erro ao usuário sem inventar dados.
 - Você não tem acesso à base de documentação de viagens.`;
