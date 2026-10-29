@@ -308,7 +308,7 @@ Cada requisito do PDF aponta para a sua prova. Legenda: ✅ concluído.
 | R3 | Registro de escalonamento (chamado, resumo, justificativa) só após aprovação | `executor.test.ts`, `cenarios.test.ts` (3) | ✅ |
 | R4 | Mocks com CH-101 e CH-103 abertos e CH-102 resolvido | `chamados.test.ts` | ✅ |
 | R5 | Somente chamados abertos podem ser escalonados, inclusive no backend | `executor.test.ts`, `cenarios.test.ts` (2) | ✅ |
-| R6 | Nunca inventar dados nem confirmar operação que não ocorreu | Confirmação final gerada pelo código (`cenarios.test.ts` 3); critério `sem_inventados` na avaliação | ✅ |
+| R6 | Nunca inventar dados nem confirmar operação que não ocorreu | Resultado real + `confirmacao` (fato escrito pelo código) voltam ao modelo (`cenarios.test.ts` 3); critérios `sem_inventados`, `confirmou_registro_real` e `informou_rejeicao` na avaliação | ✅ |
 | R7 | Rejeição encerra sem registrar; consulta simples termina após a resposta | `cenarios.test.ts` (1, 3) | ✅ |
 | **01 Fluxo e estado** | | | |
 | R8 | LangGraph com estado tipado e contratos validados | `grafo.ts` (`Estado`), schemas Zod em `ferramentas.ts` | ✅ |
@@ -334,7 +334,7 @@ Cada requisito do PDF aponta para a sua prova. Legenda: ✅ concluído.
 | R24 | Dataset com o caso obrigatório + ao menos 1 caso próprio | `aurora-avaliacao` (obrigatório + 3 próprios: CH-102 bloqueado e a jornada do PDF, isolada e após uma listagem) | ✅ |
 | R25 | Avaliador automático por código que verifica a execução da ferramenta e a correspondência com o retorno | `avaliador.ts` (`extrairExecucoes`, `sem_omissoes`, `sem_inventados`) | ✅ |
 | R26 | Avaliador reprova resposta que pula a consulta ou inventa chamado | `avaliador.test.ts` + experimentos `controle-negativo-*` | ✅ |
-| R27 | Modelo real em ao menos uma execução, identificado e documentado | `real-gpt-4o-mini-*` (12/12), configuração na seção de avaliação e nos metadados | ✅ |
+| R27 | Modelo real em ao menos uma execução, identificado e documentado | `real-gpt-4o-mini-*` (18/18), configuração na seção de avaliação e nos metadados | ✅ |
 | **06 Cenários automatizados** | | | |
 | R28–R34 | Consulta e listagem · Chamado resolvido · Aprovação e rejeição · Aprovação repetida · Falha transitória · Saída inválida e limites · Contexto e sessões | `cenarios.test.ts`, blocos 1 a 7 | ✅ |
 | R35 | Dublês do modelo, mesmo grafo e executor, separados da avaliação real | `cenarios.test.ts` (offline) × `scripts/avaliar.ts` (LangSmith) | ✅ |
