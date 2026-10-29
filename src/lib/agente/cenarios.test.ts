@@ -33,8 +33,13 @@ const responder = (texto: string) => new AIMessage(texto);
 /** Último resultado de ferramenta que o modelo recebeu (é com ele que o modelo responde). */
 function ultimoResultado(recebidas: BaseMessage[] | undefined) {
   const tool = [...(recebidas ?? [])].reverse().find((m) => ToolMessage.isInstance(m));
-  return tool ? (JSON.parse(String(tool.content)) as { ok: boolean; dados?: any; erro?: { codigo: string } }) : null;
+  return tool
+    ? (JSON.parse(String(tool.content)) as { ok: boolean; dados?: any; erro?: { codigo: string }; confirmacao?: string })
+    : null;
 }
+
+/** Passo do modelo falso que responde a partir do que observou (o fato vindo da ferramenta). */
+const relatar: Passo = (recebidas) => responder(ultimoResultado(recebidas)?.confirmacao ?? "(sem confirmação)");
 
 function montar(roteiro: Passo[], limites?: Partial<LimitesExecucao>) {
   const falso = modeloFalso(...roteiro);
@@ -53,6 +58,7 @@ const PROPOSTA_CH101 = {
 const roteiroEscalonamento = (): Passo[] => [
   pedir("consultar_chamado", { id: "CH-101" }),
   pedir("registrar_escalonamento", PROPOSTA_CH101),
+  relatar, // após a decisão o grafo volta ao modelo (Observation → Thinking)
 ];
 
 beforeEach(() => {
@@ -120,14 +126,15 @@ describe("3. Aprovação e rejeição", () => {
     await expect(servico.enviarMensagem(sessao, "e aí?")).rejects.toMatchObject({ status: 409 });
   });
 
-  it("rejeitar não escreve", async () => {
-    const { servico } = montar(roteiroEscalonamento());
+  it("rejeitar não escreve, e o modelo observa a rejeição antes de responder", async () => {
+    const { servico, chamadas } = montar(roteiroEscalonamento());
     const sessao = novaSessao();
     const { proposta } = await servico.enviarMensagem(sessao, "Escalone o CH-101.");
     const final = await servico.decidir(sessao, proposta!.propostaId, false);
 
     expect(listarEscalonamentos()).toHaveLength(0);
     expect(final.proposta).toBeNull();
+    expect(ultimoResultado(chamadas[2])).toMatchObject({ ok: false, erro: { codigo: "REJEITADO" } });
     expect(final.itens.at(-1)).toMatchObject({ tipo: "assistente", texto: expect.stringContaining("Nada foi registrado") });
   });
 
@@ -139,6 +146,28 @@ describe("3. Aprovação e rejeição", () => {
 
     expect(listarEscalonamentos()).toEqual([expect.objectContaining({ id: "ESC-0001", ...proposta!.args })]);
     expect(final.itens.at(-1)).toMatchObject({ tipo: "assistente", texto: expect.stringContaining("ESC-0001") });
+  });
+
+  it("pedido duplo (listar + escalonar): após aprovar, o modelo volta e responde as duas partes", async () => {
+    const { servico, chamadas } = montar([
+      pedir("listar_chamados", { situacao: "aberto" }),
+      pedir("registrar_escalonamento", PROPOSTA_CH101),
+      (recebidas) => {
+        const listagem = recebidas.map((m) => (ToolMessage.isInstance(m) ? JSON.parse(String(m.content)) : null))
+          .find((r) => r?.dados?.chamados);
+        const ids = listagem.dados.chamados.map((c: { id: string }) => c.id).join(" e ");
+        return responder(`Abertos: ${ids}. ${ultimoResultado(recebidas)?.confirmacao}`);
+      },
+    ]);
+    const sessao = novaSessao();
+    const { proposta } = await servico.enviarMensagem(sessao, "Liste os chamados abertos e escalone o CH-101.");
+    const final = await servico.decidir(sessao, proposta!.propostaId, true);
+
+    expect(chamadas).toHaveLength(3); // o modelo foi chamado de novo depois da decisão humana
+    expect(ultimoResultado(chamadas[2])).toMatchObject({ ok: true, dados: { escalonamento: { id: "ESC-0001" } } });
+    const texto = (final.itens.at(-1) as { texto: string }).texto;
+    expect(texto).toContain("CH-101 e CH-103");
+    expect(texto).toContain("ESC-0001");
   });
 });
 

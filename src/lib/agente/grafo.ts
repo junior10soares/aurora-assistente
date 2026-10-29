@@ -174,29 +174,27 @@ export function criarGrafo(opcoes: {
     await traceable(async (_d: object) => ({ vinculada, aprovado: vinculada && decisao.data.aprovado }), {
       name: "decisao_humana",
     })({ propostaPendente: proposta.propostaId, decisaoRecebida: decisao.success ? decisao.data : "inválida" });
-    if (!vinculada || !decisao.data.aprovado) {
-      const motivo = vinculada ? "Rejeitado pela pessoa revisora." : "Decisão inválida ou de outra proposta.";
-      return {
-        propostaPendente: null,
-        messages: [
-          resposta(proposta.toolCallId, proposta.ferramenta, {
+    // Só se aprovado: executa EXATAMENTE os args da proposta exibida, com o propostaId como chave de idempotência.
+    const resultado: ResultadoFerramenta =
+      vinculada && decisao.data.aprovado
+        ? await executarFerramenta(proposta.ferramenta, proposta.args, {
+            aprovacao: { propostaId: proposta.propostaId },
+            permitidas: assistenteDe(config).ferramentas,
+            prazo: inicio + limites.tempoAtivoMaxMs - estado.tempoAtivoMs,
+          })
+        : {
             ok: false,
-            erro: { codigo: "REJEITADO", mensagem: `${motivo} Nada foi registrado.` },
-          }),
-          new AIMessage("Escalonamento não aprovado. Nada foi registrado."),
-        ],
-      };
-    }
-
-    // Aprovado: executa EXATAMENTE os args da proposta exibida, com o propostaId como chave de idempotência.
-    const resultado = await executarFerramenta(proposta.ferramenta, proposta.args, {
-      aprovacao: { propostaId: proposta.propostaId },
-      permitidas: assistenteDe(config).ferramentas,
-      prazo: inicio + limites.tempoAtivoMaxMs - estado.tempoAtivoMs,
-    });
+            ferramenta: proposta.ferramenta,
+            tentativas: 0,
+            erro: {
+              codigo: "REJEITADO",
+              mensagem: `${vinculada ? "Rejeitado pela pessoa revisora." : "Decisão inválida ou de outra proposta."} Nada foi registrado.`,
+            },
+          };
+    // Observation: o resultado REAL volta ao modelo (ciclo ReAct), que responde ao pedido completo.
     return {
       propostaPendente: null,
-      messages: [resposta(proposta.toolCallId, proposta.ferramenta, resultado), new AIMessage(confirmacao(resultado))],
+      messages: [resposta(proposta.toolCallId, proposta.ferramenta, { ...resultado, confirmacao: confirmacao(resultado) })],
       tempoAtivoMs: estado.tempoAtivoMs + (performance.now() - inicio),
     };
   }
@@ -219,14 +217,15 @@ export function criarGrafo(opcoes: {
     .addEdge(START, "agente")
     .addConditionalEdges("agente", rota_apos_agente, ["ferramentas", END])
     .addConditionalEdges("ferramentas", rota_apos_ferramentas, ["aprovacao", "agente"])
-    // Após a decisão humana o modelo não fala mais: a mensagem final vem do código (ver confirmacao()).
-    .addEdge("aprovacao", END)
+    // Após a decisão humana o modelo observa o resultado e continua (pode responder ou agir de novo).
+    .addEdge("aprovacao", "agente")
     .compile({ checkpointer: opcoes.checkpointer ?? new MemorySaver() });
 }
 
 export type Grafo = ReturnType<typeof criarGrafo>;
 
-// Mensagem final montada a partir do retorno REAL do registro: o modelo não pode confirmar o que não ocorreu.
+// Fato do registro, escrito pelo código a partir do retorno REAL e entregue ao modelo junto do resultado,
+// para ele não confirmar o que não ocorreu (ex.: "aguardando aprovação" depois de já ter gravado).
 function confirmacao(resultado: ResultadoFerramenta): string {
   if (!resultado.ok) return `Não foi possível registrar o escalonamento: ${resultado.erro.mensagem} Nada foi registrado.`;
   const { escalonamento, jaRegistrado } = resultado.dados as { escalonamento: Escalonamento; jaRegistrado: boolean };

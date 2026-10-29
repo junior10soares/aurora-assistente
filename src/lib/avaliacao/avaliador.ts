@@ -22,6 +22,7 @@ export type Referencia =
   | { tipo: "listagem"; ferramenta: string; args: Record<string, unknown>; idsEsperados: string[] }
   | { tipo: "escalonamento_bloqueado"; chamadoId: string }
   | { tipo: "proposta_escalonamento"; chamadoId: string }
+  | { tipo: "pedido_duplo"; chamadoId: string; idsListados: string[]; aprovado: boolean }
   // Bônus (assistentes):
   | { tipo: "rag_com_fonte" }
   | { tipo: "rag_sem_evidencia" }
@@ -108,6 +109,35 @@ function avaliarProposta(saida: SaidaAvaliada, ref: Extract<Referencia, { tipo: 
   return [...notas, nota("aprovado", notas.every((n) => n.score === 1), "todos os critérios")];
 }
 
+function avaliarPedidoDuplo(saida: SaidaAvaliada, ref: Extract<Referencia, { tipo: "pedido_duplo" }>): Nota[] {
+  // Dois pedidos num turno (listar + escalonar) e decisão humana no meio: a resposta final, escrita pelo
+  // modelo DEPOIS de observar o resultado da decisão, precisa cobrir os dois e só afirmar o que ocorreu.
+  const listagem = saida.execucoes.find((e) => e.ferramenta === "listar_chamados" && e.args.situacao === "aberto" && e.resultado?.ok);
+  const retornados: string[] = listagem ? listagem.resultado!.dados.chamados.map((c: { id: string }) => c.id).sort() : [];
+  const citados = idsCitados(saida.resposta);
+  const registro = saida.execucoes.find((e) => e.ferramenta === "registrar_escalonamento" && e.resultado?.ok);
+  const escId: string | undefined = registro?.resultado?.dados?.escalonamento?.id;
+  const escCitados = saida.resposta.match(/ESC-\d{4}/g) ?? [];
+
+  const notas = [
+    nota("listou_e_citou", igual(retornados, [...ref.idsListados].sort()) && retornados.every((id) => citados.includes(id)),
+      `retornados: ${retornados.join(", ") || "nenhum"}; citados: ${citados.join(", ") || "nenhum"}`),
+    nota("sem_inventados", citados.every((id) => retornados.includes(id)), `citados: ${citados.join(", ") || "nenhum"}`),
+    ...(ref.aprovado
+      ? [
+          nota("registrou_aprovado", registro?.args.chamadoId === ref.chamadoId, registro ? `registrado ${escId}` : "nada registrado"),
+          nota("confirmou_registro_real", !!escId && escCitados.every((e) => e === escId) && escCitados.length > 0,
+            `retorno: ${escId ?? "nenhum"}; citados: ${escCitados.join(", ") || "nenhum"}`),
+        ]
+      : [
+          nota("nada_gravado", !registro, registro ? `gravou ${escId} após rejeição` : "nada gravado"),
+          nota("informou_rejeicao", escCitados.length === 0 && /rejeit|n[aã]o (foi )?(aprovad|registrad|escalonad)|nada foi registrado/i.test(saida.resposta),
+            escCitados.length ? `citou ${escCitados.join(", ")} sem registro` : "resposta sobre a rejeição verificada"),
+        ]),
+  ];
+  return [...notas, nota("aprovado", notas.every((n) => n.score === 1), "todos os critérios")];
+}
+
 // ---- Bônus: assistente de Viagens (RAG) e restrição de ferramentas ----
 
 const fontesCitadas = (texto: string) => [...new Set(texto.match(/KB-[A-Z]{2}-\d{2}/g) ?? [])].sort();
@@ -161,6 +191,8 @@ export function avaliar(saida: SaidaAvaliada, ref: Referencia): Nota[] {
       return avaliarBloqueio(saida, ref);
     case "proposta_escalonamento":
       return avaliarProposta(saida, ref);
+    case "pedido_duplo":
+      return avaliarPedidoDuplo(saida, ref);
     case "rag_com_fonte":
       return avaliarRagComFonte(saida);
     case "rag_sem_evidencia":
@@ -174,7 +206,8 @@ export function avaliar(saida: SaidaAvaliada, ref: Referencia): Nota[] {
 
 export const NOME_DATASET = "aurora-avaliacao";
 
-export const CASOS: { caso: string; pergunta: string; antes?: string[]; referencia: Referencia }[] = [
+// `decisao`: o alvo aprova/rejeita a proposta gerada e retoma o grafo, como a pessoa faria na tela.
+export const CASOS: { caso: string; pergunta: string; antes?: string[]; decisao?: boolean; referencia: Referencia }[] = [
   {
     caso: "obrigatorio-listar-abertos",
     pergunta: "Liste todos os chamados abertos.",
@@ -196,6 +229,18 @@ export const CASOS: { caso: string; pergunta: string; antes?: string[]; referenc
     antes: ["Liste todos os chamados abertos."],
     pergunta: "Consulte o CH-101 e prepare um escalonamento se ele estiver aberto.",
     referencia: { tipo: "proposta_escalonamento", chamadoId: "CH-101" },
+  },
+  {
+    caso: "proprio-pedido-duplo-aprovado",
+    pergunta: "Liste os chamados abertos e escalone o CH-101, que está travando o faturamento.",
+    decisao: true,
+    referencia: { tipo: "pedido_duplo", chamadoId: "CH-101", idsListados: ["CH-101", "CH-103"], aprovado: true },
+  },
+  {
+    caso: "proprio-pedido-duplo-rejeitado",
+    pergunta: "Liste os chamados abertos e escalone o CH-101, que está travando o faturamento.",
+    decisao: false,
+    referencia: { tipo: "pedido_duplo", chamadoId: "CH-101", idsListados: ["CH-101", "CH-103"], aprovado: false },
   },
 ];
 

@@ -12,6 +12,7 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { Client } from "langsmith";
 import { evaluate, type EvaluationResult } from "langsmith/evaluation";
 import { randomUUID } from "node:crypto";
+import { Command } from "@langchain/langgraph";
 import { criarGrafo, criarModeloOpenAI, novoTurno, type ModeloComFerramentas } from "../src/lib/agente/grafo";
 import {
   CASOS,
@@ -28,7 +29,7 @@ const client = new Client();
 const MODELO = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const parte = process.argv[2];
 
-type Caso = { caso: string; pergunta: string; referencia: Referencia; assistente?: string; antes?: string[] };
+type Caso = { caso: string; pergunta: string; referencia: Referencia; assistente?: string; antes?: string[]; decisao?: boolean };
 
 /** Cria o dataset se não existir e acrescenta casos que faltarem (idempotente, chave = metadata.caso). */
 async function garantirDataset(nome: string, descricao: string, casos: Caso[]) {
@@ -42,7 +43,7 @@ async function garantirDataset(nome: string, descricao: string, casos: Caso[]) {
     await client.createExamples(
       faltando.map((c) => ({
         dataset_id: dataset.id,
-        inputs: { pergunta: c.pergunta, assistente: c.assistente ?? "suporte", antes: c.antes ?? [] },
+        inputs: { pergunta: c.pergunta, assistente: c.assistente ?? "suporte", antes: c.antes ?? [], decisao: c.decisao ?? null },
         outputs: c.referencia,
         metadata: { caso: c.caso },
       })),
@@ -67,7 +68,12 @@ function alvo(criarModelo: (inputs: Record<string, any>) => ModeloComFerramentas
     const config = { configurable: { thread_id: sessao, assistente }, metadata: { thread_id: sessao, assistente } };
     // Turnos anteriores (contexto da conversa), quando o caso pede.
     for (const anterior of inputs.antes ?? []) await grafo.invoke(novoTurno(anterior), config);
-    const estado = await grafo.invoke(novoTurno(inputs.pergunta), config);
+    let estado = await grafo.invoke(novoTurno(inputs.pergunta), config);
+    // Decisão humana simulada (quando o caso pede): retoma com a proposta EXATA que ficou pendente.
+    if (typeof inputs.decisao === "boolean" && estado.propostaPendente) {
+      const resume = { propostaId: estado.propostaPendente.propostaId, aprovado: inputs.decisao };
+      estado = await grafo.invoke(new Command({ resume }), config);
+    }
     // Avalia só o turno da pergunta: do último HumanMessage em diante.
     const inicio = estado.messages.findLastIndex((m) => HumanMessage.isInstance(m));
     const turno = estado.messages.slice(inicio);

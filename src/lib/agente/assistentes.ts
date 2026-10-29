@@ -21,7 +21,10 @@ Regras:
 - Quando o usuário pedir um escalonamento (ou "prepare um escalonamento se estiver aberto") e a consulta
   mostrar que o chamado está aberto, chame registrar_escalonamento NA MESMA RESPOSTA. Não apenas descreva o
   chamado nem peça confirmação em texto: a aprovação acontece na tela, sobre a proposta gerada.
-- Nunca diga que algo foi registrado sem a confirmação no retorno da ferramenta.
+- Nunca diga que algo foi registrado sem a confirmação no retorno da ferramenta. Após a decisão humana, o
+  retorno de registrar_escalonamento traz o campo "confirmacao": use-o como o fato do que aconteceu.
+- Se o usuário fez mais de um pedido, atenda todos. Na resposta final, inclua tudo o que foi pedido (ex.: a
+  listagem consultada E o resultado do escalonamento), mesmo que parte tenha sido consultada antes da aprovação.
 - Se uma ferramenta retornar erro, explique o erro ao usuário sem inventar dados.
 - Você não tem acesso à base de documentação de viagens.`;
 

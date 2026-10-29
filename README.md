@@ -17,7 +17,7 @@ O modelo é tratado como **não confiável**: ele só *pede* ferramentas. As reg
 | Só chamados abertos são escalonados | Regra checada no backend ao propor **e** ao gravar | `cenarios.test.ts` (2) |
 | Nada é gravado sem aprovação humana | `interrupt()` no grafo + executor exige aprovação vinculada | `cenarios.test.ts` (3) |
 | Aprovação repetida não duplica | Trava por sessão + proposta pendente + idempotência por `propostaId` | `cenarios.test.ts` (4) |
-| Nunca confirma o que não ocorreu | Mensagem final montada pelo código a partir do retorno real | `cenarios.test.ts` (3) |
+| Nunca confirma o que não ocorreu | O resultado real do registro volta ao modelo com o fato escrito pelo código (`confirmacao`) | `cenarios.test.ts` (3) + casos `pedido-duplo-*` no LangSmith |
 | Ferramenta indevida não executa | Lista permitida por assistente + validação Zod de entrada e saída | `cenarios.test.ts` (6), `assistentes.test.ts` |
 | Execução sempre termina | Timeout, tentativas limitadas e orçamento total de tempo ativo (a espera humana não conta) | `cenarios.test.ts` (5, 6) |
 
@@ -116,10 +116,12 @@ O script cria (ou completa, sem duplicar) os datasets e roda os experimentos. Os
 | Próprio | "Escalone o CH-102, o cliente está reclamando." | `verificou_situacao` (consultou e viu "resolvido", ou o backend recusou) · `sem_proposta` · `informou_bloqueio` (sem afirmar escalonamento inexistente) |
 | Próprio | "Consulte o CH-101 e prepare um escalonamento se ele estiver aberto." (jornada do PDF) | `consultou_antes` · `proposta_gerada` (para o CH-101) · `nada_gravado_sem_aprovacao` |
 | Próprio | A mesma jornada **depois de** "Liste todos os chamados abertos." na mesma conversa | Mesmos critérios. Este caso já falhou com o modelo real (ver Decisões) e protege contra regressão |
+| Próprio | "Liste os chamados abertos e escalone o CH-101, ..." + **aprovação** (o alvo retoma o grafo) | `listou_e_citou` (CH-101 e CH-103) · `sem_inventados` · `registrou_aprovado` · `confirmou_registro_real` (só cita o `ESC-` que a ferramenta devolveu) |
+| Próprio | O mesmo pedido duplo + **rejeição** | `listou_e_citou` · `sem_inventados` · `nada_gravado` · `informou_rejeicao` (sem citar `ESC-`) |
 
 | Experimento | O que é | Resultado |
 |---|---|---|
-| `real-gpt-4o-mini-*` | Modelo real, 4 casos × 3 repetições | 12/12 aprovados |
+| `real-gpt-4o-mini-*` | Modelo real, 6 casos × 3 repetições | 18/18 aprovados |
 | `controle-negativo-pula-consulta-*` | Dublê que responde "CH-101 e CH-103" sem chamar a ferramenta | Reprovado (`ferramenta_executada = 0`) |
 | `controle-negativo-inventa-chamado-*` | Dublê que chama a ferramenta mas cita também o CH-999 | Reprovado (`sem_inventados = 0`) |
 
@@ -155,9 +157,10 @@ turno                              ← mensagem do usuário (rastro raiz)
 └─ aprovacao                       ← pausa (interrupt) com a proposta
 
 retomada (aprovado | rejeitado)    ← outra requisição HTTP, outro rastro raiz
-└─ aprovacao
-   ├─ decisao_humana               ← propostaId pendente × decisão recebida
-   └─ registrar_escalonamento [tool]
+├─ aprovacao
+│  ├─ decisao_humana               ← propostaId pendente × decisão recebida
+│  └─ registrar_escalonamento [tool]
+└─ agente                          ← o modelo observa o resultado real e responde ao pedido completo
 ```
 
 - **Correlação:** todo rastro leva `thread_id` (`assistente:sessão`; agrupa a conversa na aba *Threads*), `sessao_id`, `assistente` e `execucao_id` (liga o `turno` à sua `retomada`).
@@ -186,16 +189,18 @@ flowchart LR
   agente -- respondeu / limite atingido --> END
   ferramentas -- leitura executada --> agente
   ferramentas -- escrita válida vira proposta --> aprovacao
-  aprovacao -- "interrupt() ⏸ aprovado → registra / rejeitado" --> END
+  aprovacao -- "interrupt() ⏸ aprovado → registra / rejeitado → resultado" --> agente
 ```
 
 | Nó | Responsabilidade |
 |---|---|
 | `agente` | Confere os limites (passos e tempo ativo) e chama o modelo com o prompt e as ferramentas do assistente da execução |
 | `ferramentas` | Executor do grafo: leituras passam por `executarFerramenta`; a escrita passa por `prepararProposta` e **não executa** |
-| `aprovacao` | `interrupt({ proposta })` pausa e salva o estado. Na retomada, valida a decisão (`propostaId` + `aprovado`), executa **exatamente** os args da proposta e monta a mensagem final a partir do retorno real |
+| `aprovacao` | `interrupt({ proposta })` pausa e salva o estado. Na retomada, valida a decisão (`propostaId` + `aprovado`), executa **exatamente** os args da proposta (só se aprovado) e devolve o resultado real ao `agente` |
 
-**Jornada do exemplo:** "Consulte o CH-101 e prepare um escalonamento se ele estiver aberto." → `consultar_chamado({id:"CH-101"})` → `registrar_escalonamento({...})` vira proposta → pausa → aprovação → "Escalonamento ESC-0001 registrado para o chamado CH-101 após aprovação humana."
+**Jornada do exemplo:** "Consulte o CH-101 e prepare um escalonamento se ele estiver aberto." → `consultar_chamado({id:"CH-101"})` → `registrar_escalonamento({...})` vira proposta → pausa → aprovação → resultado volta ao modelo → resposta citando o `ESC-0001` devolvido pela ferramenta.
+
+**Ciclo ReAct completo.** O grafo é o laço pensar → agir → observar: `agente` (pensa) → `ferramentas` ou `aprovacao` (age) → resultado volta ao `agente` (observa) → até responder (`END`). Isso vale também depois da decisão humana. Por isso um pedido com duas partes ("liste os abertos e escalone o CH-101") recebe uma resposta final com as duas.
 
 **Execução e limites.** Uma execução é um turno do usuário, incluindo a retomada após a aprovação. Cada nó soma ao estado o tempo que **ele mesmo** levou (`tempoAtivoMs`); a espera humana acontece com o grafo parado e não entra na conta.
 
@@ -254,7 +259,7 @@ Um **único grafo** atende os dois assistentes. A configuração é escolhida **
 - **Regra "só abertos" duas vezes.** Antes de propor (proposta inválida nem chega ao humano) e ao gravar (defesa em profundidade contra aprovação forjada).
 - **O navegador nunca envia o conteúdo da proposta**, só `propostaId` e a decisão. O que é gravado é a proposta guardada no estado do servidor, então não há como aprovar algo diferente do exibido.
 - **Aprovação repetida em 3 camadas.** Trava por conversa (dois cliques simultâneos: um registro e um `409`), checagem da proposta pendente (repetir depois de decidido: `409`) e idempotência por `propostaId` no registro (cobre novas tentativas após timeout). Reusar a chave com outro conteúdo é recusado (`CONFLITO_IDEMPOTENCIA`).
-- **Após a decisão humana, o modelo não fala mais.** Num teste com o modelo real, ele respondeu "registrado e aguardando aprovação" depois de gravar, o que é falso. A mensagem final passou a ser montada pelo código a partir do retorno real, e "nunca confirmar o que não ocorreu" é garantido por construção.
+- **Após a decisão humana, o resultado volta ao modelo (ciclo ReAct).** Numa versão anterior a mensagem final era fixa, do código, porque o modelo real chegou a dizer "registrado e aguardando aprovação" depois de gravar. Só que isso quebrava o ciclo: num pedido duplo ("liste e escalone"), a parte da listagem se perdia. Agora o `ToolMessage` do registro leva, além do retorno real, o campo `confirmacao` (o fato escrito pelo código), e o modelo responde a partir dele. "Nunca confirmar o que não ocorreu" é provado pelos casos `pedido-duplo-aprovado/rejeitado` no LangSmith e pelos testes offline.
 - **Nova mensagem bloqueada com proposta pendente.** Evita deixar uma chamada de ferramenta sem resposta no histórico e força a decisão explícita.
 - **Prompt reforçado para gerar a proposta, e caso de avaliação para isso.** No meio de uma conversa (após uma listagem), o modelo real passou a só *descrever* o CH-101 em vez de chamar `registrar_escalonamento` (5 de 5 tentativas sem proposta). O prompt agora instrui a chamar a ferramenta na mesma resposta, pois a confirmação acontece na tela. Resultado: 5 de 5 com proposta, sem propor em consultas simples nem para o CH-102. O cenário virou caso do dataset.
 
@@ -284,7 +289,7 @@ Um **único grafo** atende os dois assistentes. A configuração é escolhida **
 | Trava por conversa em memória | Vale para uma única instância | Trava distribuída (Redis) ou restrição no banco |
 | Sem autenticação | Quem tiver o UUID acessa a sessão | Sessão vinculada ao usuário autenticado; aprovação com identidade e autorização do revisor |
 | Modelo não determinístico | O texto pode variar entre execuções | Regras críticas já não dependem do modelo; ampliar o dataset e rodar a avaliação em CI |
-| Datasets pequenos (4 + 4 casos) | Cobertura de qualidade limitada | Casos de inexistente, falhas, ambiguidades e regressões reais |
+| Datasets pequenos (6 + 4 casos) | Cobertura de qualidade limitada | Casos de inexistente, falhas, ambiguidades e regressões reais |
 | RAG lexical | Sinônimos fora do vocabulário podem não recuperar | Embeddings com armazenamento vetorial local, mantendo os filtros |
 | Falha simulada é estado global do processo | Uso restrito a testes e demonstração; não há acesso pela API | Injeção de falhas por configuração do executor |
 | Dois escalonamentos distintos do mesmo chamado são permitidos | Cada um exige sua própria aprovação; a mesma operação nunca duplica | Regra de negócio "um escalonamento ativo por chamado", se desejada |
